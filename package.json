@@ -10,7 +10,8 @@
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "lint": "eslint src/",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "test": "node --test test/cookie-sanitize.test.mjs"
   },
   "keywords": [
     "overleaf",

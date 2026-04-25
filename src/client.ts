@@ -161,7 +161,10 @@ export class OverleafClient {
   }
 
   private getCookieHeader(): string {
-    return Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+    return Object.entries(this.cookies)
+      .filter(([, v]) => !/[\x00-\x1F\x7F]/.test(v))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('; ');
   }
 
   private getHeaders(includeContentType = false): Record<string, string> {
@@ -192,7 +195,14 @@ export class OverleafClient {
     for (const setCookieHeader of setCookie) {
       const match = setCookieHeader.match(/^([^=]+)=([^;]+)/);
       if (match) {
-        this.cookies[match[1]] = match[2];
+        const value = match[2];
+        if (/[\x00-\x1F\x7F]/.test(value)) {
+          // Skip cookies whose value contains control characters — they would
+          // produce an "Invalid character in header content" error when the
+          // Cookie header is assembled and sent by Node's http(s) module.
+          continue;
+        }
+        this.cookies[match[1]] = value;
       }
     }
   }
