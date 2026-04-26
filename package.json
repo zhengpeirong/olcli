@@ -10,6 +10,7 @@
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "lint": "eslint src/",
+    "test": "node --test --import tsx/esm test/multipart.test.ts",
     "prepare": "npm run build"
   },
   "keywords": [

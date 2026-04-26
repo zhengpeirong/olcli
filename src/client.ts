@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as https from 'node:https';
 import * as http from 'node:http';
+import { randomBytes } from 'node:crypto';
 
 // Read version from package.json
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -58,6 +59,46 @@ export interface Credentials {
   cookies: Record<string, string>;
   csrf: string;
   baseUrl?: string;
+}
+
+type MultipartTextField = { name: string; value: string };
+type MultipartFileField = { name: string; filename: string; contentType: string; data: Buffer };
+type MultipartField = MultipartTextField | MultipartFileField;
+
+/**
+ * Build a multipart/form-data body as a Buffer that can be passed directly
+ * to Node's http(s).request.write(). Returns both the body and the boundary
+ * string so the caller can set the Content-Type header.
+ */
+export function buildMultipartBody(fields: MultipartField[]): { body: Buffer; boundary: string } {
+  const boundary = `----FormBoundary${randomBytes(16).toString('hex')}`;
+  // Escape double-quotes and strip CR/LF to prevent header injection in
+  // Content-Disposition parameter values.
+  const escape = (s: string) => s.replace(/\r|\n/g, '').replace(/"/g, '\\"');
+  const parts: Buffer[] = [];
+
+  for (const field of fields) {
+    if ('filename' in field) {
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${escape(field.name)}"; filename="${escape(field.filename)}"\r\n` +
+        `Content-Type: ${field.contentType}\r\n` +
+        `\r\n`
+      ));
+      parts.push(field.data);
+      parts.push(Buffer.from('\r\n'));
+    } else {
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${escape(field.name)}"\r\n` +
+        `\r\n` +
+        `${field.value}\r\n`
+      ));
+    }
+  }
+
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+  return { body: Buffer.concat(parts), boundary };
 }
 
 export class OverleafClient {
@@ -908,20 +949,23 @@ export class OverleafClient {
       try {
         // Try to create a temp file to probe the folder
         const testFileName = `.olcli-probe-${Date.now()}.tmp`;
-        const formData = new FormData();
-        formData.append('targetFolderId', folderId);
-        formData.append('name', testFileName);
-        formData.append('type', 'text/plain');
-        formData.append('qqfile', new Blob(['probe']), testFileName);
+        const { body: probeBody, boundary: probeBoundary } = buildMultipartBody([
+          { name: 'targetFolderId', value: folderId },
+          { name: 'name', value: testFileName },
+          { name: 'type', value: 'text/plain' },
+          { name: 'qqfile', filename: testFileName, contentType: 'text/plain', data: Buffer.from('probe') }
+        ]);
 
         const response = await this.httpRequest(`${this.uploadUrl(projectId)}?folder_id=${folderId}`, {
           method: 'POST',
           headers: {
             'Cookie': this.getCookieHeader(),
             'User-Agent': USER_AGENT,
-            'X-Csrf-Token': this.csrf
+            'X-Csrf-Token': this.csrf,
+            'Content-Type': `multipart/form-data; boundary=${probeBoundary}`,
+            'Content-Length': String(probeBody.length)
           },
-          body: formData as unknown as Buffer,
+          body: probeBody,
           expect: 'json'
         });
 
@@ -992,20 +1036,23 @@ export class OverleafClient {
 
     // Helper function to attempt upload with a specific folder ID
     const tryUpload = async (fid: string): Promise<{ success: boolean; entityId?: string; entityType?: string; error?: string }> => {
-      const formData = new FormData();
-      formData.append('targetFolderId', fid);
-      formData.append('name', baseName);
-      formData.append('type', mimeType);
-      formData.append('qqfile', new Blob([content]), baseName);
+      const { body: uploadBody, boundary: uploadBoundary } = buildMultipartBody([
+        { name: 'targetFolderId', value: fid },
+        { name: 'name', value: baseName },
+        { name: 'type', value: mimeType },
+        { name: 'qqfile', filename: baseName, contentType: mimeType, data: content }
+      ]);
 
       const response = await this.httpRequest(`${this.uploadUrl(projectId)}?folder_id=${encodeURIComponent(fid)}`, {
         method: 'POST',
         headers: {
           'Cookie': this.getCookieHeader(),
           'User-Agent': USER_AGENT,
-          'X-Csrf-Token': this.csrf
+          'X-Csrf-Token': this.csrf,
+          'Content-Type': `multipart/form-data; boundary=${uploadBoundary}`,
+          'Content-Length': String(uploadBody.length)
         },
-        body: formData as unknown as Buffer,
+        body: uploadBody,
         expect: 'text'
       });
 
